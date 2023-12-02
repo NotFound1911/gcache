@@ -110,7 +110,7 @@ func TestMapCache_Close(t *testing.T) {
 	require.False(t, cache.closed)
 	time.Sleep(time.Second)
 	err := cache.Close()
-	time.Sleep(time.Second)
+	time.Sleep(2*time.Second)
 	require.NoError(t, err)
 	require.True(t, cache.closed)
 }
