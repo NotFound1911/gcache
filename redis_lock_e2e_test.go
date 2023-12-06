@@ -174,3 +174,101 @@ func TestLock_e2e_Unlock(t *testing.T) {
 		})
 	}
 }
+func TestLock_e2e_Refresh(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+	testCase := []struct {
+		name   string
+		before func(t *testing.T)
+		after  func(t *testing.T)
+		lock   *Lock
+
+		wantErr error
+	}{
+		{
+			name: "lock not hold",
+			before: func(t *testing.T) {
+
+			},
+			after: func(t *testing.T) {
+
+			},
+			lock: &Lock{
+				key:        "refresh_key1",
+				value:      "val1",
+				client:     rdb,
+				expiration: time.Minute,
+			},
+			wantErr: ErrLockNotHold,
+		},
+		{
+			name: "lock hold by others",
+			before: func(t *testing.T) {
+				// 别人拿锁
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				res, err := rdb.Set(ctx, "refresh_key2", "val2", time.Second*10).Result()
+				require.NoError(t, err)
+				assert.Equal(t, "OK", res)
+			},
+			after: func(t *testing.T) {
+				//没有释放锁 键值对不变
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				timeout, err := rdb.TTL(ctx, "refresh_key2").Result()
+				require.NoError(t, err)
+				// 如果要是刷新成功了，过期时间是一分钟，即便考虑测试本身的运行时间，timeout > 10s
+				// 也就是，如果 timeout <= 10s，说明没刷新成功
+				require.True(t, timeout <= time.Second*10)
+				_, err = rdb.Del(ctx, "refresh_key2").Result()
+				require.NoError(t, err)
+			},
+			lock: &Lock{
+				key:        "refresh_key2",
+				value:      "test",
+				client:     rdb,
+				expiration: time.Minute,
+			},
+			wantErr: ErrLockNotHold,
+		},
+		{
+			name: "refreshed",
+			before: func(t *testing.T) {
+				// 模拟你自己加的锁
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				res, err := rdb.Set(ctx, "refresh_key3", "test", time.Second*10).Result()
+				require.NoError(t, err)
+				assert.Equal(t, "OK", res)
+			},
+			after: func(t *testing.T) {
+				// 没释放锁，键值对不变
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+				timeout, err := rdb.TTL(ctx, "refresh_key3").Result()
+				require.NoError(t, err)
+				// 如果要是刷新成功了，过期时间是一分钟，即便考虑测试本身的运行时间，timeout > 10s
+				require.True(t, timeout > time.Second*10)
+				_, err = rdb.Del(ctx, "refresh_key3").Result()
+				require.NoError(t, err)
+			},
+			lock: &Lock{
+				key:        "refresh_key3",
+				value:      "test",
+				client:     rdb,
+				expiration: time.Minute,
+			},
+		},
+	}
+	for _, tc := range testCase {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.before(t)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			err := tc.lock.Refresh(ctx)
+			assert.Equal(t, tc.wantErr, err)
+			tc.after(t)
+		})
+	}
+}
