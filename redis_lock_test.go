@@ -125,3 +125,77 @@ func TestLock_Unlock(t *testing.T) {
 		})
 	}
 }
+
+func TestLock_Refresh(t *testing.T) {
+	testCases := []struct {
+		name string
+
+		mock  func(controller *gomock.Controller) redis.Cmdable
+		key   string
+		value string
+
+		lock       *Lock
+		expiration time.Duration
+		wantErr    error
+	}{
+		{
+			name: "eval error",
+			mock: func(controller *gomock.Controller) redis.Cmdable {
+				cmd := mocks.NewMockCmdable(controller)
+				res := redis.NewCmd(context.Background())
+				res.SetErr(context.DeadlineExceeded)
+				cmd.EXPECT().Eval(context.Background(), luaRefresh, []string{"key1"}, []any{"val1", float64(60)}).
+					Return(res)
+				return cmd
+			},
+			key:        "key1",
+			value:      "val1",
+			wantErr:    context.DeadlineExceeded,
+			expiration: time.Minute,
+		},
+		{
+			name: "lock not hold",
+			mock: func(controller *gomock.Controller) redis.Cmdable {
+				cmd := mocks.NewMockCmdable(controller)
+				res := redis.NewCmd(context.Background())
+				res.SetVal(int64(0))
+				cmd.EXPECT().Eval(context.Background(), luaRefresh, []string{"key1"}, []any{"val1", float64(60)}).
+					Return(res)
+				return cmd
+			},
+			key:        "key1",
+			value:      "val1",
+			wantErr:    ErrLockNotHold,
+			expiration: time.Minute,
+		},
+		{
+			name: "unlocked",
+			mock: func(controller *gomock.Controller) redis.Cmdable {
+				cmd := mocks.NewMockCmdable(controller)
+				res := redis.NewCmd(context.Background())
+				res.SetVal(int64(1))
+				cmd.EXPECT().Eval(context.Background(), luaRefresh, []string{"key1"}, []any{"val1", float64(60)}).
+					Return(res)
+				return cmd
+			},
+			key:        "key1",
+			value:      "val1",
+			expiration: time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			lock := &Lock{
+				key:        tc.key,
+				value:      tc.value,
+				client:     tc.mock(ctrl),
+				expiration: tc.expiration,
+			}
+			err := lock.Refresh(context.Background())
+			assert.Equal(t, tc.wantErr, err)
+		})
+	}
+}

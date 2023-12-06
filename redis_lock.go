@@ -15,6 +15,9 @@ var (
 	ErrNotOwnLock          = errors.New("redis-lock: 不是自己拥有的锁")
 	//go:embed lua/unlock.lua
 	luaUnlock string
+
+	//go:embed lua/refresh.lua
+	luaRefresh string
 )
 
 type Client struct {
@@ -54,6 +57,17 @@ type Lock struct {
 
 func (l *Lock) Unlock(ctx context.Context) error {
 	res, err := l.client.Eval(ctx, luaUnlock, []string{l.key}, l.value).Int64()
+	if err != nil {
+		return err
+	}
+	if res != 1 {
+		return ErrLockNotHold
+	}
+	return nil
+}
+
+func (l *Lock) Refresh(ctx context.Context) error {
+	res, err := l.client.Eval(ctx, luaRefresh, []string{l.key}, l.value, l.expiration.Seconds()).Int64()
 	if err != nil {
 		return err
 	}
